@@ -1,14 +1,22 @@
 import socket
 import threading
-        
-        
+
 def UsernameValidator(username, client_names):
     for name in client_names.values():
         if name == username:
             return False
     return True
 
-def create_group(group_name, members, client_names, client_socket):
+def send_group_message(group_name, message, client_names, clients):
+    # Check if group exists
+    if group_name in client_names:
+        members = client_names[group_name]
+        # Iterate through all clients and send the message to the members of the group
+        for client, username in client_names.items():
+            if username in members:
+                client.sendall(message.encode('utf-8'))
+
+def create_group(group_name, members, client_names, clients, client_socket):
     # Validate group name
     if not group_name.isalnum() or len(group_name.split()) > 1:
         client_socket.sendall("[Invalid group name. Group name must contain only alphanumeric characters and be a single word.]".encode('utf-8'))
@@ -18,17 +26,19 @@ def create_group(group_name, members, client_names, client_socket):
     client_names[group_name] = members
     client_socket.sendall(f"[Group {group_name} created with members: {', '.join(members)}]".encode('utf-8'))
 
-        
+    # Notify all members of the new group
+    send_group_message(group_name, f"[You are enrolled in the {group_name} group]", client_names, clients)
+
 # Function to handle client connections
 def handle_client(client_socket, clients, client_names):
-    # send welcome msg to new chatter, broadcast newcomer msg to all other chatters
+    # Send welcome message to new chatter, broadcast newcomer message to all other chatters
     for client in clients:
         if client != client_socket:
             client.sendall(f"[{client_names[client_socket]} joined]".encode('utf-8'))
         if client == client_socket:
             client.sendall(f"[Welcome {client_names[client_socket]}!]".encode('utf-8'))
-            
-    # loops to check for new message input from clients
+
+    # Loops to check for new message input from clients
     while True:
         try:
             message = client_socket.recv(1024).decode('utf-8')
@@ -45,14 +55,12 @@ def handle_client(client_socket, clients, client_names):
                         break
                 else:
                     # Create the group
-                    create_group(group_name, members, client_names, client_socket) 
-            # Receive @quit message from client
+                    create_group(group_name, members, client_names, clients, client_socket)
             elif message == "@quit":
                 for client in clients:
                     if client != client_socket:
                         client.sendall(f"[{client_names[client_socket]} exited]".encode('utf-8'))
                 break
-            # Receive @names message from client
             if message == "@names":
                 namesMessage = "[Connected users: "
                 firstName = True
@@ -64,15 +72,29 @@ def handle_client(client_socket, clients, client_names):
                         namesMessage = namesMessage.__add__(f", {client_names[client]}")
                 namesMessage = namesMessage.__add__("]")
                 client_socket.sendall(namesMessage.encode('utf-8'))
-            # Receive normal message from client
+
+            elif message.startswith("@group send"):
+                parts = message.split(' ', 3)  # Expected format: @group send groupName message
+                if len(parts) < 4:
+                    client_socket.sendall("[Error: Invalid group message format.]".encode('utf-8'))
+                else:
+                    _, _, group_name, group_message = parts
+                    # Send the message to all members of the group
+                    if group_name in client_names and client_names[client_socket] in client_names[group_name]:
+                        for client, username in client_names.items():
+                            if username in client_names[group_name]:
+                                client.sendall(
+                                    f"[{group_name}][{client_names[client_socket]}]: {group_message}".encode('utf-8'))
+                    else:
+                        client_socket.sendall(
+                            "[Error: You are not a member of this group or the group does not exist.]".encode('utf-8'))
             elif message:
                 if message.startswith('@'):
                     recipient_username, personal_message = message[1:].split(' ', 1)
                     # Iterate through clients to find the recipient
                     for client, username in client_names.items():
                         if username == recipient_username:
-                            client.sendall(
-                                f"[{client_names[client_socket]} (private)]: {personal_message}".encode('utf-8'))
+                            client.sendall(f"[{client_names[client_socket]} (private)]: {personal_message}".encode('utf-8'))
                             break
                 else:
                     # Broadcast message to all clients
@@ -87,7 +109,6 @@ def handle_client(client_socket, clients, client_names):
     clients.remove(client_socket)
     client_socket.close()
     del client_names[client_socket]
-    
 
 # Main function
 def main():
@@ -111,15 +132,15 @@ def main():
         print(f"[*] Accepted connection from {addr[0]}:{addr[1]}")
 
         isUsernameUnique = False
-        while isUsernameUnique == False:
+        while not isUsernameUnique:
             # Prompt client for username
             client_socket.sendall("Enter your name: ".encode('utf-8'))
             username = client_socket.recv(1024).decode('utf-8').strip()
             isUsernameUnique = UsernameValidator(username, client_names)
-            if isUsernameUnique == False:
+            if not isUsernameUnique:
                 client_socket.sendall("[Username has already been used. Please enter another name.]".encode('utf-8'))
 
-        # add new client username to list of clients names if valid
+        # Add new client username to list of clients names if valid
         client_names[client_socket] = username
         # Add client to list
         clients.append(client_socket)
@@ -129,7 +150,6 @@ def main():
         client_thread.start()
 
     server_socket.close()
-
 
 if __name__ == "__main__":
     main()
